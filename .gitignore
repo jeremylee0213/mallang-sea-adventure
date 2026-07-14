@@ -1,0 +1,11 @@
+node_modules/
+dist/
+output/
+.env*
+test-results/
+playwright-report/
+plan/
+subagent-runs/
+progress.md
+*.tsbuildinfo
+.DS_Store
