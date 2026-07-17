@@ -1,13 +1,18 @@
 import type {
+  CosmeticDefinition,
+  CourseQuestion,
   GameSettings,
   IslandDefinition,
   ItemDefinition,
   ItemId,
+  LearningDifficulty,
+  LearningSubject,
   LearningStats,
   MathQuestion,
   QuizQuestion,
   SaveData,
 } from '../types';
+import { COURSE_DEFINITIONS, DIFFICULTY_DEFINITIONS } from '../data/courseContent';
 import type { MapFrame } from './MinimapRenderer';
 import { MinimapRenderer } from './MinimapRenderer';
 
@@ -27,6 +32,12 @@ export interface UIHandlers {
   toggleMap: Handler;
   selectItem: Handler<number>;
   useItem: Handler;
+  openCourse: Handler;
+  courseConfirm: Handler<{ subject: LearningSubject; difficulty: LearningDifficulty }>;
+  courseCancel: Handler;
+  openShop: Handler;
+  shopClose: Handler;
+  cosmeticAction: Handler<string>;
   mathAnswer: Handler<number>;
   mathClose: Handler;
   languageAnswer: Handler<string>;
@@ -44,6 +55,8 @@ export interface HudFrame {
   mode: 'sailing' | 'island';
   health: number;
   quest: string;
+  starPoints: number;
+  boosting: boolean;
 }
 
 export interface ItemFrame {
@@ -59,19 +72,23 @@ function required<T extends HTMLElement>(id: string): T {
   return element as T;
 }
 
-const TYPE_LABELS: Record<QuizQuestion['type'], string> = {
-  'hiragana-match': 'あ 히라가나',
-  'katakana-match': 'ア 가타카나',
+const TYPE_LABELS: Record<CourseQuestion['type'], string> = {
+  'hiragana-match': 'あ 같은 글자 찾기',
+  'katakana-match': 'ア 같은 글자 찾기',
   'korean-to-japanese': '가 뜻 찾기',
-  'picture-to-japanese': '▦ 그림 찾기',
+  'picture-to-japanese': '▣ 그림 찾기',
   'audio-to-japanese': '🔊 소리 찾기',
+  'language-meaning': '가 낱말 찾기',
+  'language-audio': '🔊 소리 찾기',
+  mathematics: '＋ 계산 찾기',
+  'science-fact': '🔬 과학 탐구',
 };
 
 const TUTORIALS = [
   { art: '⛵', title: '배를 움직여 볼까요?', copy: 'WASD 또는 방향키로 천천히 항해해요. 배에는 부드러운 관성이 있어요.', keys: ['W', 'A', 'S', 'D'] },
   { art: 'あ', title: '정답 블록을 찾아요', copy: '문제 카드와 같은 일본어 블록에 배로 닿으면 돼요. 틀려도 괜찮아요!', keys: ['R', '발음'] },
-  { art: '✨', title: '아이템은 든든한 친구예요', copy: '숫자 1~4로 아이템을 고르고 Space로 사용해요. 나침반이 정답을 비춰 줘요.', keys: ['1–4', 'Space'] },
-  { art: '🏝', title: '섬에도 모험이 기다려요', copy: '선착장 가까이에서 E를 누르면 내려요. 상자, 친구, 배도 E로 만나요.', keys: ['E', 'F'] },
+  { art: '✨', title: '부스터와 아이템을 써 봐요', copy: '항해 중 Space를 누르면 무제한 부스터! 숫자 1~4로 아이템을 고르고 Q로 사용해요.', keys: ['Space', 'Q'] },
+  { art: '🏝', title: '어느 해안이든 탐험해요', copy: '섬 해안 가까이에서 E를 누르면 내려요. 섬에서는 마우스나 방향키로 시점을 돌려요.', keys: ['E', '마우스'] },
 ] as const;
 
 export class UIManager {
@@ -82,11 +99,14 @@ export class UIManager {
   private handlers: UIHandlers | null = null;
   private menuWasOpenBeforeControls = true;
   private mapOpen = false;
+  private selectedSubject: LearningSubject = 'japanese';
+  private selectedDifficulty: LearningDifficulty = 'easy';
 
   constructor(islands: readonly IslandDefinition[]) {
     for (const id of [
       'menu-screen', 'tutorial-screen', 'game-hud', 'pause-screen', 'controls-screen',
-      'world-map-screen', 'math-screen', 'language-screen', 'stage-clear-screen', 'celebration-screen',
+      'course-screen', 'shop-screen', 'world-map-screen', 'math-screen', 'language-screen',
+      'stage-clear-screen', 'celebration-screen',
     ]) {
       this.screens.set(id, required(id));
     }
@@ -120,6 +140,15 @@ export class UIManager {
     required('controls-btn').addEventListener('click', () => this.showControls(true));
     required('controls-close-btn').addEventListener('click', () => this.showControls(false));
     required('learned-btn').addEventListener('click', () => required('learned-list').classList.toggle('hidden'));
+    required('course-settings-btn').addEventListener('click', () => handlers.openCourse());
+    required('course-cancel-btn').addEventListener('click', () => handlers.courseCancel());
+    required('course-confirm-btn').addEventListener('click', () => handlers.courseConfirm({
+      subject: this.selectedSubject,
+      difficulty: this.selectedDifficulty,
+    }));
+    required('shop-btn').addEventListener('click', () => handlers.openShop());
+    required('shop-close-btn').addEventListener('click', () => handlers.shopClose());
+    required('use-item-btn').addEventListener('click', () => handlers.useItem());
     required<HTMLInputElement>('volume-input').addEventListener('input', (event) => {
       handlers.settings({ volume: Number((event.target as HTMLInputElement).value) });
     });
@@ -136,6 +165,10 @@ export class UIManager {
     this.show('menu-screen');
     required('menu-best-score').textContent = String(save.highScore);
     required('menu-best-stage').textContent = String(save.highestStage);
+    required('menu-star-points').textContent = save.starPoints.toLocaleString('ko-KR');
+    const course = COURSE_DEFINITIONS.find((entry) => entry.id === save.selectedSubject);
+    const difficulty = DIFFICULTY_DEFINITIONS.find((entry) => entry.id === save.selectedDifficulty);
+    required('menu-course-summary').textContent = `${course?.icon ?? '📚'} ${course?.name ?? '학습'} · ${difficulty?.name ?? '쉬움'}`;
     const continueButton = required<HTMLButtonElement>('continue-btn');
     continueButton.disabled = !save.tutorialComplete && save.score === 0;
     continueButton.title = continueButton.disabled ? '먼저 새 모험을 시작해 주세요.' : '';
@@ -175,6 +208,9 @@ export class UIManager {
     required('hud-score').textContent = frame.score.toLocaleString('ko-KR');
     required('hud-combo').textContent = String(frame.combo);
     required('quest-copy').textContent = frame.quest;
+    required('hud-star-points').textContent = frame.starPoints.toLocaleString('ko-KR');
+    required('boost-chip').classList.toggle('hidden', frame.mode !== 'sailing');
+    required('boost-chip').classList.toggle('active', frame.boosting);
     const health = required('health-pill');
     health.classList.toggle('hidden', frame.mode !== 'island');
     required('health-text').textContent = String(Math.round(frame.health));
@@ -182,12 +218,17 @@ export class UIManager {
     required('quiz-card').classList.toggle('hidden', frame.mode !== 'sailing');
   }
 
-  updateQuestion(question: QuizQuestion, current: number, target: number): void {
+  updateQuestion(question: CourseQuestion, current: number, target: number): void {
     required('quiz-type').textContent = TYPE_LABELS[question.type];
     required('quiz-progress').textContent = `${current} / ${target}`;
     required('quiz-instruction').textContent = question.prompt;
-    required('quiz-prompt').textContent = question.entry.japanese;
-    required('quiz-meaning').textContent = `${question.entry.reading} · ${question.entry.korean}`;
+    required('quiz-prompt').textContent = question.type === 'mathematics' || question.type === 'science-fact'
+      ? question.prompt
+      : question.answer;
+    required('quiz-prompt').setAttribute('lang', question.speechLanguage?.split('-')[0] ?? 'ko');
+    required('quiz-meaning').textContent = question.type === 'mathematics' || question.type === 'science-fact'
+      ? ''
+      : [question.reading, question.koreanMeaning].filter(Boolean).join(' · ');
     const picture = required<HTMLElement>('picture-prompt');
     picture.classList.toggle('hidden', !question.promptImageKey);
     picture.style.backgroundImage = question.promptImageKey
@@ -197,6 +238,61 @@ export class UIManager {
 
   setSpeaking(speaking: boolean): void {
     required('speak-btn').classList.toggle('speaking', speaking);
+  }
+
+  showCourseSetup(save: SaveData, canCancel: boolean): void {
+    this.selectedSubject = save.selectedSubject;
+    this.selectedDifficulty = save.selectedDifficulty;
+    this.show('course-screen');
+    required<HTMLButtonElement>('course-cancel-btn').classList.toggle('hidden', !canCancel);
+    const subjects = required('subject-options');
+    subjects.replaceChildren(...COURSE_DEFINITIONS.map((course) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'subject-option';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(course.id === this.selectedSubject));
+      button.innerHTML = `<span aria-hidden="true">${course.icon}</span>${course.name}<small>${course.description}</small>`;
+      button.addEventListener('click', () => {
+        this.selectedSubject = course.id;
+        this.refreshCourseSelection();
+      });
+      return button;
+    }));
+    const difficulties = required('difficulty-options');
+    difficulties.replaceChildren(...DIFFICULTY_DEFINITIONS.map((difficulty) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'difficulty-option';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(difficulty.id === this.selectedDifficulty));
+      button.textContent = `${difficulty.name} · ${difficulty.description}`;
+      button.addEventListener('click', () => {
+        this.selectedDifficulty = difficulty.id;
+        this.refreshCourseSelection();
+      });
+      return button;
+    }));
+    this.refreshCourseSelection();
+  }
+
+  hideCourseSetup(): void {
+    this.hide('course-screen');
+  }
+
+  showShop(save: SaveData, catalog: readonly CosmeticDefinition[]): void {
+    this.show('shop-screen');
+    required('shop-star-points').textContent = save.starPoints.toLocaleString('ko-KR');
+    this.renderCosmetics('boat-shop-list', catalog.filter((item) => item.target === 'boat'), save);
+    this.renderCosmetics('character-shop-list', catalog.filter((item) => item.target === 'character'), save);
+  }
+
+  hideShop(): void {
+    this.hide('shop-screen');
+  }
+
+  setShopStatus(message: string): void {
+    required('shop-status').textContent = message;
   }
 
   updateItems(frame: ItemFrame): void {
@@ -366,6 +462,46 @@ export class UIManager {
       this.hide('controls-screen');
       if (this.menuWasOpenBeforeControls) this.show('menu-screen');
     }
+  }
+
+  private refreshCourseSelection(): void {
+    required('subject-options').querySelectorAll<HTMLButtonElement>('.subject-option').forEach((button, index) => {
+      button.setAttribute('aria-checked', String(COURSE_DEFINITIONS[index]?.id === this.selectedSubject));
+    });
+    required('difficulty-options').querySelectorAll<HTMLButtonElement>('.difficulty-option').forEach((button, index) => {
+      button.setAttribute('aria-checked', String(DIFFICULTY_DEFINITIONS[index]?.id === this.selectedDifficulty));
+    });
+    const subject = COURSE_DEFINITIONS.find((entry) => entry.id === this.selectedSubject);
+    const difficulty = DIFFICULTY_DEFINITIONS.find((entry) => entry.id === this.selectedDifficulty);
+    required('course-status').textContent = `${subject?.name ?? '과목'} · ${difficulty?.name ?? '난이도'} 항로를 선택했어요.`;
+  }
+
+  private renderCosmetics(id: string, cosmetics: readonly CosmeticDefinition[], save: SaveData): void {
+    const target = required(id);
+    target.replaceChildren(...cosmetics.map((cosmetic) => {
+      const owned = cosmetic.target === 'boat'
+        ? save.ownedBoatSkins.includes(cosmetic.id)
+        : save.ownedCharacterSkins.includes(cosmetic.id);
+      const equipped = cosmetic.target === 'boat'
+        ? save.equippedBoatSkin === cosmetic.id
+        : save.equippedCharacterSkin === cosmetic.id;
+      const card = document.createElement('article');
+      card.className = `cosmetic-card${equipped ? ' equipped' : ''}`;
+      const actionLabel = equipped ? '장착 중 ✓' : owned ? '장착하기' : `✦ ${cosmetic.price.toLocaleString('ko-KR')}`;
+      card.innerHTML = `
+        <div class="cosmetic-preview" style="--preview:${cosmetic.palette.primary}" aria-hidden="true">${cosmetic.icon}</div>
+        <div class="cosmetic-copy"><b>${cosmetic.name}</b><small>${cosmetic.description}</small></div>
+      `;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cosmetic-action';
+      button.disabled = equipped;
+      button.textContent = actionLabel;
+      button.setAttribute('aria-label', equipped ? `${cosmetic.name} 장착 중` : `${cosmetic.name} ${actionLabel}`);
+      button.addEventListener('click', () => this.handlers?.cosmeticAction(cosmetic.id));
+      card.append(button);
+      return card;
+    }));
   }
 
   private hideAllScreens(): void {

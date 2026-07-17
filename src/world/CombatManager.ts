@@ -23,7 +23,7 @@ export class CombatManager {
     this.player.group.add(this.sword);
   }
 
-  update(delta: number, input: InputManager): AttackResult | null {
+  update(delta: number, input: InputManager, aimHeading = this.player.heading): AttackResult | null {
     this.cooldown = Math.max(0, this.cooldown - delta);
     this.swingRemaining = Math.max(0, this.swingRemaining - delta);
     if (this.swingRemaining > 0) {
@@ -39,7 +39,7 @@ export class CombatManager {
     this.swingRemaining = 0.28;
     const result = this.monsters.attack(
       this.player.group.position,
-      this.player.heading,
+      aimHeading,
       3.7,
       1,
     );

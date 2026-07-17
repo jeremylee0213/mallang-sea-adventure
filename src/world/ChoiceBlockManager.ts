@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { QuizChoice, QuizQuestion } from '../types';
+import type { CourseQuizChoice, QuizChoice } from '../types';
 import { createTextTexture, disposeObject } from './voxel';
 
 export interface ChoiceBlockState {
@@ -11,12 +11,14 @@ export interface ChoiceBlockState {
 }
 
 interface ChoiceBlockRuntime {
-  choice: QuizChoice;
+  choice: ChoiceBlock;
   group: THREE.Group;
   phase: number;
   basePosition: THREE.Vector3;
   driftDirection: THREE.Vector3;
 }
+
+type ChoiceBlock = Pick<QuizChoice, 'id' | 'label' | 'isCorrect'> | CourseQuizChoice;
 
 const BLOCK_COLORS = [0xffcf66, 0x74d3c1, 0xff9e83, 0x8fc8ef, 0xb7da78];
 
@@ -33,7 +35,7 @@ export class ChoiceBlockManager {
   }
 
   setQuestion(
-    question: QuizQuestion,
+    question: { readonly choices: readonly ChoiceBlock[] },
     origin: THREE.Vector3,
     moving: boolean,
     seed = 0,
@@ -106,7 +108,7 @@ export class ChoiceBlockManager {
     }
   }
 
-  checkCollision(position: THREE.Vector3, radius = 2.25): QuizChoice | null {
+  checkCollision(position: THREE.Vector3, radius = 2.25): ChoiceBlock | null {
     for (const block of this.blocks) {
       const distanceSquared = (
         (block.group.position.x - position.x) ** 2
@@ -188,7 +190,7 @@ export class ChoiceBlockManager {
     this.highlightRemaining = 0;
   }
 
-  private createBlock(choice: QuizChoice, position: THREE.Vector3, index: number): ChoiceBlockRuntime {
+  private createBlock(choice: ChoiceBlock, position: THREE.Vector3, index: number): ChoiceBlockRuntime {
     const group = new THREE.Group();
     group.name = `choice-${choice.id}`;
     group.position.copy(position);

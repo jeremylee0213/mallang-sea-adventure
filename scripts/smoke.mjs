@@ -71,13 +71,13 @@ async function walkPlayerTo(page, target, stopWhen, maxSteps = 180) {
     if (!snapshot.player) throw new Error(`Player is unavailable in ${snapshot.mode}`);
     const dx = target.x - snapshot.player.x;
     const dz = target.z - snapshot.player.z;
-    const keys = [];
-    if (Math.abs(dx) > 0.45) keys.push(dx > 0 ? 'KeyD' : 'KeyA');
-    if (Math.abs(dz) > 0.45) keys.push(dz > 0 ? 'KeyS' : 'KeyW');
-    for (const key of keys) await page.keyboard.down(key);
-    await advance(page, 5 * (1000 / 60));
-    for (const key of keys) await page.keyboard.up(key);
-    await advance(page, 1000 / 60);
+    const desired = Math.atan2(dx, dz);
+    const difference = normalizeAngle(desired - snapshot.camera.yaw);
+    if (Math.abs(difference) > 0.08) {
+      await keyFrames(page, difference > 0 ? 'ArrowRight' : 'ArrowLeft', 3);
+    } else {
+      await keyFrames(page, 'KeyW', Math.hypot(dx, dz) < 3 ? 2 : 5);
+    }
   }
   throw new Error(`Player navigation timed out at ${JSON.stringify((await state(page)).player)}`);
 }
@@ -117,14 +117,15 @@ function defaultSave(overrides = {}) {
   };
 }
 
-async function createPage(browser, saveData = null) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+async function createPage(browser, saveData = null, viewport = { width: 1280, height: 720 }) {
+  const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
   const page = await context.newPage();
   page.on('console', (message) => {
     if (message.type() === 'error') report.errors.push({ type: 'console', text: message.text() });
   });
   page.on('pageerror', (error) => report.errors.push({ type: 'pageerror', text: String(error) }));
   await page.addInitScript((initialSave) => {
+    window.__mallangSpokenTexts = [];
     class QuietUtterance {
       constructor(text) {
         this.text = text;
@@ -142,6 +143,7 @@ async function createPage(browser, saveData = null) {
       cancel() {},
       getVoices() { return [{ lang: 'ja-JP', name: 'QA Japanese' }]; },
       speak(utterance) {
+        window.__mallangSpokenTexts.push({ text: utterance.text, language: utterance.lang });
         utterance.onstart?.();
         window.setTimeout(() => utterance.onend?.(), 15);
       },
@@ -169,12 +171,24 @@ try {
     check((await state(page)).mode === 'MENU', 'menu renders');
 
     await page.click('#start-btn');
+    check(await page.locator('#course-screen').isVisible(), 'first run opens course setup');
+    await screenshot(page, '02-course-setup');
+    await page.locator('.subject-option', { hasText: '일본어' }).click();
+    await page.locator('.difficulty-option', { hasText: '쉬움' }).click();
+    await page.click('#course-confirm-btn');
     check((await state(page)).mode === 'TUTORIAL', 'first run opens tutorial');
     await screenshot(page, '02-tutorial');
     await page.click('#tutorial-skip-btn');
     await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).mode === 'SAILING');
     let snapshot = await state(page);
     check(snapshot.blocks.filter((block) => block.correct).length === 1, 'sailing quiz has exactly one correct block');
+    const quizLayout = await page.evaluate(() => {
+      const card = document.querySelector('#quiz-card').getBoundingClientRect();
+      const items = document.querySelector('#item-bar').getBoundingClientRect();
+      return { top: card.top, bottom: card.bottom, itemTop: items.top, height: window.innerHeight };
+    });
+    check(quizLayout.top > quizLayout.height * 0.45, 'quiz card is placed in the lower view', JSON.stringify(quizLayout));
+    check(quizLayout.bottom <= quizLayout.itemTop, 'quiz card does not overlap the item bar', JSON.stringify(quizLayout));
     await screenshot(page, '03-sailing');
 
     const scoreBefore = snapshot.score;
@@ -193,9 +207,18 @@ try {
     check(snapshot.blocks.filter((block) => block.correct).length === 1, 'next question appears after feedback');
 
     const compassBefore = snapshot.items.find((item) => item.id === 'starlightCompass').count;
-    await keyFrames(page, 'Space', 2);
+    const speedBeforeBoost = Math.abs(snapshot.boat.speed);
+    await page.keyboard.down('Space');
+    await advance(page, 1000);
     snapshot = await state(page);
-    check(snapshot.items.find((item) => item.id === 'starlightCompass').count === compassBefore - 1, 'Space uses selected item');
+    check(snapshot.boat.boosting === true, 'Space activates unlimited sailing boost');
+    check(Math.abs(snapshot.boat.speed) > speedBeforeBoost, 'Space boost increases boat speed');
+    check(snapshot.items.find((item) => item.id === 'starlightCompass').count === compassBefore, 'boost does not consume inventory');
+    await page.keyboard.up('Space');
+    await advance(page, 30);
+    await keyFrames(page, 'KeyQ', 2);
+    snapshot = await state(page);
+    check(snapshot.items.find((item) => item.id === 'starlightCompass').count === compassBefore - 1, 'Q uses selected item');
     check(snapshot.items.find((item) => item.id === 'starlightCompass').active > 0, 'item effect activates');
 
     await page.keyboard.press('KeyM');
@@ -222,6 +245,36 @@ try {
     await context.close();
   }
 
+  for (const subject of ['mathematics', 'science']) {
+    const courseSave = defaultSave({
+      version: 2,
+      selectedSubject: subject,
+      selectedDifficulty: 'easy',
+      courseSetupComplete: true,
+      starPoints: 0,
+      ownedBoatSkins: ['boat-sunrise'],
+      ownedCharacterSkins: ['character-sky'],
+      equippedBoatSkin: 'boat-sunrise',
+      equippedCharacterSkin: 'character-sky',
+      tutorialComplete: true,
+    });
+    const { context, page } = await createPage(browser, courseSave);
+    await page.goto(`${baseUrl}/?seed=${subject === 'mathematics' ? 13 : 14}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof window.render_game_to_text === 'function');
+    await page.click('#continue-btn');
+    await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).mode === 'SAILING');
+    await advance(page, 50);
+    const snapshot = await state(page);
+    const visiblePrompt = await page.locator('#quiz-prompt').innerText();
+    const visibleMeaning = await page.locator('#quiz-meaning').innerText();
+    const spoken = await page.evaluate(() => window.__mallangSpokenTexts.at(-1));
+    check(snapshot.quiz.subject === subject, `${subject} course starts a real sailing question`);
+    check(visiblePrompt === snapshot.quiz.prompt, `${subject} card shows the question prompt`);
+    check(!visibleMeaning.includes(snapshot.quiz.answer), `${subject} card hides the answer before success`);
+    check(spoken?.text === snapshot.quiz.prompt, `${subject} autoplay speaks the prompt, not the answer`);
+    await context.close();
+  }
+
   {
     const islandSave = defaultSave({
       highestStage: 7,
@@ -238,16 +291,40 @@ try {
     await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).mode === 'SAILING');
     await steerBoatTo(
       page,
-      { x: 45, z: 91 },
+      { x: 58, z: 94 },
       (value) => value.interaction?.kind === 'dock',
-      90,
+      130,
     );
+    const shoreBoat = (await state(page)).boat;
+    check(Math.hypot(shoreBoat.x - 45, shoreBoat.z - 91) > 4, 'landing prompt works away from the fixed dock');
     await page.keyboard.press('KeyE');
     await advance(page, 900);
     let snapshot = await state(page);
     check(snapshot.mode === 'ISLAND_EXPLORATION', 'E docks and switches to character mode');
     check(snapshot.activeIsland === 'jeju-wind-island', 'Jeju island unlocks when stage 7 begins');
     check(!(await page.locator('#item-bar').innerText()).includes('별빛 나침반'), 'sailing-only compass is absent from island slots');
+    const appleBefore = snapshot.items.find((item) => item.id === 'healingApple').count;
+    await keyFrames(page, 'KeyQ', 2);
+    snapshot = await state(page);
+    check(snapshot.items.find((item) => item.id === 'healingApple').count === appleBefore - 1, 'Q uses the selected island item once');
+    check(snapshot.items.find((item) => item.id === 'healingApple').cooldown > 0, 'island item cooldown starts after Q');
+    const beforeCameraTurn = snapshot;
+    await keyFrames(page, 'ArrowRight', 8);
+    snapshot = await state(page);
+    check(Math.abs(normalizeAngle(snapshot.camera.yaw - beforeCameraTurn.camera.yaw)) > 0.1, 'island arrow key rotates the camera');
+    check(
+      Math.hypot(snapshot.player.x - beforeCameraTurn.player.x, snapshot.player.z - beforeCameraTurn.player.z) < 0.05,
+      'camera rotation does not move the player',
+    );
+    const beforeForward = snapshot;
+    await keyFrames(page, 'KeyW', 8);
+    snapshot = await state(page);
+    const movedX = snapshot.player.x - beforeForward.player.x;
+    const movedZ = snapshot.player.z - beforeForward.player.z;
+    check(
+      movedX * Math.sin(beforeForward.camera.yaw) + movedZ * Math.cos(beforeForward.camera.yaw) > 0,
+      'W moves the island player toward the camera view',
+    );
     await screenshot(page, '07-jeju-island');
 
     await walkPlayerTo(
@@ -298,7 +375,7 @@ try {
 
     await walkPlayerTo(
       page,
-      { x: 45, z: 94.5 },
+      { x: shoreBoat.x, z: shoreBoat.z },
       (value) => value.interaction?.kind === 'board',
       180,
     );
@@ -311,9 +388,9 @@ try {
     await page.click('#continue-btn');
     await steerBoatTo(
       page,
-      { x: 45, z: 91 },
+      { x: 58, z: 94 },
       (value) => value.interaction?.kind === 'dock',
-      90,
+      130,
     );
     await page.keyboard.press('KeyE');
     await advance(page, 900);
@@ -383,6 +460,27 @@ try {
     await advance(page, 100);
     snapshot = await state(page);
     check(snapshot.mode === 'ISLAND_EXPLORATION' && snapshot.score > 1200, 'picture quiz scores and returns to exploration');
+    await context.close();
+  }
+
+  {
+    const shopSave = defaultSave({ score: 900, highScore: 900, tutorialComplete: true });
+    const { context, page } = await createPage(browser, shopSave);
+    await page.goto(`${baseUrl}/?seed=35`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof window.render_game_to_text === 'function');
+    let snapshot = await state(page);
+    check(snapshot.starPoints === 900, 'version 1 score migrates to star points once');
+    await page.click('#shop-btn');
+    await page.locator('.cosmetic-card', { hasText: '잎새 탐험가' }).locator('.cosmetic-action').click();
+    snapshot = await state(page);
+    check(snapshot.cosmetics.character === 'character-leaf-scout', 'shop purchase equips a character skin');
+    check(snapshot.starPoints === 400 && snapshot.score === 900, 'shop spends wallet points without reducing score');
+    await screenshot(page, '10-shop-equipped');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof window.render_game_to_text === 'function');
+    snapshot = await state(page);
+    check(snapshot.cosmetics.character === 'character-leaf-scout', 'equipped skin persists after reload');
+    check(snapshot.starPoints === 400, 'save version 2 does not mint migration points again');
     await context.close();
   }
 
@@ -461,6 +559,28 @@ try {
     check(snapshot.blocks.filter((block) => block.correct).length === 1, 'free sailing starts a fresh learning question');
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('mallang-sea-adventure.save.v1')));
     check(stored.freeSailUnlocked === true, 'free sailing unlock persists');
+    await context.close();
+  }
+
+  {
+    const narrowSave = defaultSave({ tutorialComplete: true });
+    const { context, page } = await createPage(browser, narrowSave, { width: 390, height: 844 });
+    await page.goto(`${baseUrl}/?seed=51`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof window.render_game_to_text === 'function');
+    await page.click('#continue-btn');
+    const layout = await page.evaluate(() => {
+      const card = document.querySelector('#quiz-card').getBoundingClientRect();
+      const items = document.querySelector('#item-bar').getBoundingClientRect();
+      return {
+        cardBottom: card.bottom,
+        itemTop: items.top,
+        bodyWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    check(layout.cardBottom <= layout.itemTop, 'narrow quiz card stays above item slots', JSON.stringify(layout));
+    check(layout.bodyWidth <= layout.viewportWidth, 'narrow HUD has no horizontal overflow', JSON.stringify(layout));
+    await screenshot(page, '12-narrow-sailing');
     await context.close();
   }
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { InputManager } from '../game/InputManager';
+import type { CosmeticPalette } from '../types';
 import type { CollisionManager } from './CollisionManager';
 import { addBox } from './voxel';
 
@@ -8,6 +9,7 @@ export interface BoatState {
   z: number;
   heading: number;
   speed: number;
+  boosting: boolean;
 }
 
 export class BoatController {
@@ -16,8 +18,10 @@ export class BoatController {
   heading = 0;
   maxSpeed = 9;
   rocking = 0;
+  isBoosting = false;
   private turnVelocity = 0;
   private elapsed = 0;
+  private readonly appearanceMeshes: THREE.Mesh[] = [];
 
   constructor() {
     this.group.name = 'player-boat';
@@ -34,13 +38,19 @@ export class BoatController {
     const previous = this.group.position.clone();
     const forward = input.isDown('KeyW', 'ArrowUp');
     const backward = input.isDown('KeyS', 'ArrowDown');
+    this.isBoosting = input.isDown('Space') && !backward;
     const steer = (input.isDown('KeyA', 'ArrowLeft') ? 1 : 0)
       - (input.isDown('KeyD', 'ArrowRight') ? 1 : 0);
 
-    const targetMax = this.maxSpeed * Math.min(1.35, Math.max(1, speedMultiplier));
-    if (forward) this.speed += 7.2 * delta;
+    const boostMultiplier = this.isBoosting ? 1.35 : 1;
+    const targetMax = this.maxSpeed * Math.min(
+      1.5,
+      Math.max(1, speedMultiplier) * boostMultiplier,
+    );
+    if (this.isBoosting) this.speed += 11.2 * delta;
+    else if (forward) this.speed += 7.2 * delta;
     if (backward) this.speed -= (this.speed > 0 ? 10 : 4.5) * delta;
-    if (!forward && !backward) this.speed *= Math.exp(-1.35 * delta);
+    if (!forward && !backward && !this.isBoosting) this.speed *= Math.exp(-1.35 * delta);
     this.speed = THREE.MathUtils.clamp(this.speed, -3.1, targetMax);
 
     const steerStrength = 0.55 + Math.min(1, Math.abs(this.speed) / 4) * 0.75;
@@ -84,20 +94,34 @@ export class BoatController {
       z: Number(this.group.position.z.toFixed(2)),
       heading: Number(this.heading.toFixed(3)),
       speed: Number(this.speed.toFixed(2)),
+      boosting: this.isBoosting,
     };
+  }
+
+  applyAppearance(palette: CosmeticPalette): void {
+    const colors = [palette.primary, palette.secondary, palette.accent];
+    this.appearanceMeshes.forEach((mesh, index) => {
+      const material = mesh.material;
+      if (material instanceof THREE.MeshStandardMaterial) {
+        material.color.set(colors[index % colors.length] ?? palette.primary);
+      }
+    });
   }
 
   private buildModel(): void {
     const hull = new THREE.Group();
-    addBox(hull, [3.4, 0.65, 5.1], [0, 0, 0], 0xb85e45);
-    addBox(hull, [2.8, 0.55, 4.7], [0, 0.5, 0.05], 0xf2b45f);
-    addBox(hull, [2.15, 0.28, 3.35], [0, 0.83, 0.1], 0xffe0a0);
+    this.appearanceMeshes.push(
+      addBox(hull, [3.4, 0.65, 5.1], [0, 0, 0], 0xb85e45),
+      addBox(hull, [2.8, 0.55, 4.7], [0, 0.5, 0.05], 0xf2b45f),
+      addBox(hull, [2.15, 0.28, 3.35], [0, 0.83, 0.1], 0xffe0a0),
+    );
     addBox(hull, [0.25, 5.2, 0.25], [0, 3.15, 0.1], 0x7b4d37);
     addBox(hull, [0.13, 0.13, 2.8], [0, 5.05, -0.15], 0x7b4d37);
     const sail = addBox(hull, [0.12, 3.25, 2.65], [-0.03, 3.45, -0.7], 0xfff4c3);
     sail.rotation.x = -0.04;
     const accent = addBox(hull, [0.14, 0.48, 2.72], [-0.1, 3.85, -0.72], 0x55b8ca);
     accent.rotation.x = -0.04;
+    this.appearanceMeshes.push(sail, accent);
     addBox(hull, [0.72, 0.72, 0.72], [0, 1.4, 0.5], 0xf2c28c);
     addBox(hull, [0.82, 0.35, 0.82], [0, 1.9, 0.5], 0xef7357);
     hull.rotation.y = Math.PI;

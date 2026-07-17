@@ -61,6 +61,75 @@ export interface QuizQuestion {
   readonly choices: readonly QuizChoice[];
 }
 
+export type LearningSubject =
+  | 'japanese'
+  | 'english'
+  | 'chinese'
+  | 'mathematics'
+  | 'science';
+
+export type LearningDifficulty = 'easy' | 'normal' | 'challenge';
+
+export type CourseQuestionType =
+  | QuestionType
+  | 'language-meaning'
+  | 'language-audio'
+  | 'mathematics'
+  | 'science-fact';
+
+export interface CourseDefinition {
+  readonly id: LearningSubject;
+  readonly name: string;
+  readonly description: string;
+  readonly icon: string;
+  readonly speechLanguage?: string;
+}
+
+export interface DifficultyDefinition {
+  readonly id: LearningDifficulty;
+  readonly name: string;
+  readonly description: string;
+  readonly choiceCount: 3 | 4 | 5;
+  readonly movingDistractors: boolean;
+  readonly hintDelaySeconds: number;
+}
+
+export interface CourseEntry {
+  readonly id: string;
+  readonly subject: Exclude<LearningSubject, 'mathematics'>;
+  readonly category: string;
+  readonly answer: string;
+  readonly reading: string;
+  readonly korean: string;
+  readonly prompt?: string;
+  readonly imageKey?: string;
+  readonly level: 1 | 2 | 3;
+  readonly distractors?: readonly string[];
+}
+
+export interface CourseQuizChoice {
+  readonly id: string;
+  readonly label: string;
+  readonly isCorrect: boolean;
+}
+
+export interface CourseQuestion {
+  readonly id: string;
+  readonly entryId: string;
+  readonly subject: LearningSubject;
+  readonly difficulty: LearningDifficulty;
+  readonly type: CourseQuestionType;
+  readonly prompt: string;
+  readonly accessibleText: string;
+  readonly answer: string;
+  readonly reading?: string;
+  readonly koreanMeaning?: string;
+  readonly spokenText?: string;
+  readonly speechLanguage?: string;
+  readonly promptImageKey?: string;
+  readonly choices: readonly CourseQuizChoice[];
+}
+
 export type MathKind =
   | 'two-digit-add'
   | 'two-digit-subtract'
@@ -194,7 +263,48 @@ export interface GameSettings {
   mathInputMode: 'choices' | 'keyboard';
 }
 
-export interface SaveData {
+export type CosmeticTarget = 'boat' | 'character';
+
+export interface CosmeticPalette {
+  readonly primary: string;
+  readonly secondary: string;
+  readonly accent: string;
+}
+
+export interface CosmeticDefinition {
+  readonly id: string;
+  readonly target: CosmeticTarget;
+  readonly name: string;
+  readonly description: string;
+  readonly price: number;
+  readonly icon: string;
+  readonly palette: CosmeticPalette;
+}
+
+export interface CosmeticShopState {
+  starPoints: number;
+  ownedBoatSkins: string[];
+  ownedCharacterSkins: string[];
+  equippedBoatSkin: string;
+  equippedCharacterSkin: string;
+}
+
+export type ShopActionReason =
+  | 'purchased'
+  | 'equipped'
+  | 'already-owned'
+  | 'insufficient-points'
+  | 'not-owned'
+  | 'unknown-cosmetic';
+
+export interface ShopTransactionResult {
+  readonly success: boolean;
+  readonly reason: ShopActionReason;
+  readonly cosmeticId: string;
+  readonly state: CosmeticShopState;
+}
+
+export interface SaveData extends CosmeticShopState {
   version: number;
   highestStage: number;
   currentStage: number;
@@ -211,6 +321,9 @@ export interface SaveData {
   lastPlayedAt: string;
   tutorialComplete: boolean;
   freeSailUnlocked: boolean;
+  selectedSubject: LearningSubject;
+  selectedDifficulty: LearningDifficulty;
+  courseSetupComplete: boolean;
 }
 
 export interface StorageLike {
@@ -252,5 +365,6 @@ export interface SpeechOptions {
   readonly volume?: number;
   readonly rate?: number;
   readonly pitch?: number;
+  readonly language?: string;
   readonly onSpeakingChange?: (speaking: boolean) => void;
 }

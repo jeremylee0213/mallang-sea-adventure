@@ -1,17 +1,23 @@
 import * as THREE from 'three';
 import {
+  CourseManager,
   ItemManager,
   itemIdsForContext,
   itemIsUsableInContext,
   MathQuizGenerator,
   QuizManager,
   SaveManager,
+  ShopManager,
   settleStageCompletion,
   SpeechManager,
   StageManager,
 } from '../core';
 import { ISLANDS, ITEM_DEFINITIONS, JAPANESE_CONTENT } from '../data';
+import { COSMETIC_BY_ID, COSMETICS } from '../data/cosmetics';
+import { DIFFICULTY_DEFINITION_BY_ID } from '../data/courseContent';
 import type {
+  CosmeticShopState,
+  CourseQuestion,
   GameSettings,
   GameState,
   IslandDefinition,
@@ -25,6 +31,7 @@ import type {
 import { UIManager } from '../ui/UIManager';
 import { CombatManager } from '../world/CombatManager';
 import type { WorldInteraction } from '../world/IslandManager';
+import type { ShoreLanding } from '../world/CollisionManager';
 import { OceanScene } from '../world/OceanScene';
 import { AudioManager } from './AudioManager';
 import { InputManager } from './InputManager';
@@ -61,6 +68,8 @@ export class GameEngine {
   private readonly saveManager = new SaveManager();
   private readonly ui: UIManager;
   private readonly quizManager: QuizManager;
+  private readonly courseManager: CourseManager;
+  private readonly shop = new ShopManager();
   private readonly mathGenerator: MathQuizGenerator;
   private readonly combat: CombatManager;
   private save: SaveData;
@@ -68,7 +77,7 @@ export class GameEngine {
   private items: ItemManager;
   private state: GameState = 'MENU';
   private pausedFrom: GameState = 'SAILING';
-  private currentQuestion: QuizQuestion | null = null;
+  private currentQuestion: CourseQuestion | null = null;
   private currentMath: MathQuestion | null = null;
   private islandQuestion: QuizQuestion | null = null;
   private activeIsland: IslandDefinition | null = null;
@@ -85,6 +94,8 @@ export class GameEngine {
   private tutorialStep = 0;
   private speechRepeats = 0;
   private speechRepeatTimer = 0;
+  private speechText = '';
+  private speechLanguage = 'ja-JP';
   private hudRefreshTimer = 0;
   private mapOpen = false;
   private manualAdvancing = false;
@@ -96,20 +107,24 @@ export class GameEngine {
   private questionElapsed = 0;
   private autoHintShown = false;
   private wakeSoundTimer = 0;
+  private courseStartPending = false;
+  private currentLanding: ShoreLanding | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
-    this.qaScenario = import.meta.env.DEV ? params.get('qa') : null;
-    const seed = Number(import.meta.env.DEV ? params.get('seed') ?? 20260714 : 20260714);
+    this.qaScenario = params.get('qa');
+    const seed = Number(params.get('seed') ?? 20260714);
     const random = seededRandom(Number.isFinite(seed) ? seed : 20260714);
     this.save = this.saveManager.load();
     this.stageManager = new StageManager(this.save.currentStage);
     this.items = new ItemManager(this.save.inventory);
     this.quizManager = new QuizManager(JAPANESE_CONTENT, random);
+    this.courseManager = new CourseManager(random);
     this.mathGenerator = new MathQuizGenerator(random);
     this.world = new OceanScene(canvas, ISLANDS);
     this.ui = new UIManager(ISLANDS);
     this.combat = new CombatManager(this.world.player, this.world.monsters, this.audio);
+    this.applyCosmetics();
     this.bindUI();
     this.applySettings();
     this.positionAtStart();
@@ -167,6 +182,16 @@ export class GameEngine {
         freeSail: this.freeSailMode,
       },
       score: this.save.score,
+      starPoints: this.save.starPoints,
+      course: {
+        subject: this.save.selectedSubject,
+        difficulty: this.save.selectedDifficulty,
+        setupComplete: this.save.courseSetupComplete,
+      },
+      cosmetics: {
+        boat: this.save.equippedBoatSkin,
+        character: this.save.equippedCharacterSkin,
+      },
       combo: this.combo,
       completedStages: this.save.completedStages,
       discoveredIslands: this.save.discoveredIslands,
@@ -175,10 +200,12 @@ export class GameEngine {
       player,
       activeIsland: this.activeIsland?.id ?? null,
       quiz: this.currentQuestion ? {
+        subject: this.currentQuestion.subject,
         type: this.currentQuestion.type,
         prompt: this.currentQuestion.prompt,
-        japanese: this.currentQuestion.entry.japanese,
-        korean: this.currentQuestion.entry.korean,
+        answer: this.currentQuestion.answer,
+        reading: this.currentQuestion.reading,
+        korean: this.currentQuestion.koreanMeaning,
         feedbackPending: this.feedbackAction,
       } : null,
       blocks: this.world.choices.getStates(),
@@ -205,6 +232,10 @@ export class GameEngine {
         answer: this.islandQuestion.entry.japanese,
       } : null,
       enemies: this.world.monsters.getStates(),
+      camera: {
+        yaw: Number(this.world.cameraController.playerYaw.toFixed(3)),
+        pitch: Number(this.world.cameraController.playerPitch.toFixed(3)),
+      },
     });
   }
 
@@ -272,10 +303,11 @@ export class GameEngine {
     });
     this.world.cameraController.update(delta, this.world.boat.group, this.world.boat.heading);
     this.questionElapsed += delta;
+    const courseDifficulty = DIFFICULTY_DEFINITION_BY_ID.get(this.save.selectedDifficulty);
     if (
-      this.stageManager.stage.autoHint
+      (this.stageManager.stage.autoHint || this.save.selectedDifficulty === 'easy')
       && !this.autoHintShown
-      && this.questionElapsed >= 8
+      && this.questionElapsed >= (courseDifficulty?.hintDelaySeconds ?? 8)
       && !this.feedbackAction
     ) {
       this.autoHintShown = true;
@@ -288,7 +320,7 @@ export class GameEngine {
       this.wakeSoundTimer = 1.35;
     }
     this.updateDockPrompt();
-    if (this.input.consume('Space')) this.useSelectedItem();
+    if (this.input.consume('KeyQ')) this.useSelectedItem();
     this.consumeSlotKeys();
 
     if (this.collisionCooldown <= 0 && this.feedbackAction !== 'next-question' && this.feedbackAction !== 'stage-clear') {
@@ -306,21 +338,23 @@ export class GameEngine {
       this.world.cameraController.update(delta, this.world.boat.group, this.world.boat.heading);
       if (this.dockingTimer > 0) return;
       this.state = 'SAILING';
+      this.currentLanding = null;
       this.ui.showGame();
       this.ui.toast('다시 배에 올랐어요. 출항!');
       return;
     }
+    const parked = this.currentLanding?.boatPosition ?? island.dock;
     this.world.boat.group.position.x = THREE.MathUtils.damp(
-      this.world.boat.group.position.x, island.dock.x, 3.5, delta,
+      this.world.boat.group.position.x, parked.x, 3.5, delta,
     );
     this.world.boat.group.position.z = THREE.MathUtils.damp(
-      this.world.boat.group.position.z, island.dock.z, 3.5, delta,
+      this.world.boat.group.position.z, parked.z, 3.5, delta,
     );
-    this.world.boat.heading = island.dock.heading;
+    if (this.currentLanding) this.world.boat.heading = this.currentLanding.playerSpawn.heading;
     this.world.boat.speed = 0;
     this.world.cameraController.update(delta, this.world.boat.group, this.world.boat.heading);
     if (this.dockingTimer > 0) return;
-    this.world.player.spawn(island);
+    this.world.player.spawn(island, this.currentLanding?.playerSpawn);
     this.world.cameraController.setMode('player', true, this.world.player.group);
     this.world.monsters.spawnForIsland(island, this.stageManager.stage.monsterCount);
     this.state = 'ISLAND_EXPLORATION';
@@ -337,7 +371,14 @@ export class GameEngine {
       return;
     }
     const itemState = this.items.tick(delta);
-    this.world.player.update(delta, this.input, island, this.world.collisions);
+    this.world.cameraController.updatePlayerInput(delta, this.input);
+    this.world.player.update(
+      delta,
+      this.input,
+      island,
+      this.world.collisions,
+      this.world.cameraController.playerYaw,
+    );
     this.world.cameraController.update(delta, this.world.player.group, this.world.player.heading);
     const damage = this.world.monsters.update(
       delta,
@@ -348,19 +389,20 @@ export class GameEngine {
       const returned = this.world.player.damage(damage);
       if (returned) {
         this.world.player.health = this.world.player.maxHealth;
-        this.world.player.spawn(island);
+        this.world.player.spawn(island, this.currentLanding?.playerSpawn);
         this.world.monsters.resetContactCooldowns();
         this.ui.toast('괜찮아요! 선착장에서 다시 시작해요.');
       } else {
         this.ui.toast(this.world.player.shieldRemaining > 0 ? '방패 조개가 지켜 줬어요!' : '살짝 부딪혔어요. 천천히 다시 해봐요!');
       }
     }
-    const attack = this.combat.update(delta, this.input);
+    const attack = this.combat.update(delta, this.input, this.world.cameraController.playerYaw);
     if (attack?.defeated) {
       this.addScore(30);
       this.ui.toast('별빛으로 변해 보물을 남겼어요! +30');
     }
     this.updateIslandPrompt();
+    if (this.input.consume('KeyQ')) this.useSelectedItem();
     this.consumeSlotKeys();
     if (this.input.consume('KeyE') && this.nearby) this.activateIslandInteraction();
   }
@@ -387,7 +429,9 @@ export class GameEngine {
     if (!correct) {
       this.attemptedWrong = true;
       this.combo = 0;
-      this.recordLearning(this.currentQuestion.entry.id, false);
+      if (this.currentQuestion.subject === 'japanese') {
+        this.recordLearning(this.currentQuestion.entryId, false);
+      }
       this.world.boat.triggerFriendlyRock();
       this.world.choices.remove(choiceId);
       this.audio.play('wrong');
@@ -407,7 +451,7 @@ export class GameEngine {
     let points = 100 + (this.attemptedWrong ? 0 : 50);
     if (this.combo % 3 === 0) points += 100;
     this.addScore(points);
-    this.recordLearning(question.entry.id, true);
+    if (question.subject === 'japanese') this.recordLearning(question.entryId, true);
     const progress = this.stageManager.recordCorrect();
     if (progress.justCompleted && this.freeSailMode) {
       this.stageManager.setStage(this.stageManager.stage);
@@ -415,9 +459,13 @@ export class GameEngine {
     this.ui.showFeedback(
       true,
       this.combo >= 3 ? `${this.combo}연속! 정말 멋져요!` : '정답이에요!',
-      `${question.entry.japanese} (${question.entry.reading}) — ${question.entry.korean} · +${points}`,
+      `${question.answer}${question.reading ? ` (${question.reading})` : ''} — ${question.koreanMeaning ?? '정답'} · +${points}`,
     );
-    this.queueSpeech(1);
+    this.queueSpeech(
+      1,
+      question.answer,
+      question.speechLanguage ?? (['science', 'mathematics'].includes(question.subject) ? 'ko-KR' : 'ja-JP'),
+    );
     this.feedbackTimer = 1.05;
     this.feedbackAction = progress.justCompleted && !this.freeSailMode
       ? 'stage-clear'
@@ -435,14 +483,24 @@ export class GameEngine {
   }
 
   private createQuestion(): void {
-    this.currentQuestion = this.quizManager.nextQuestion(this.stageManager.stage, this.save.wordStats);
+    this.currentQuestion = this.save.selectedSubject === 'japanese'
+      ? this.courseManager.nextJapaneseQuestion(
+          this.save.selectedDifficulty,
+          this.stageManager.stage,
+          this.save.wordStats,
+        )
+      : this.courseManager.nextQuestion(
+          this.save.selectedSubject,
+          this.save.selectedDifficulty,
+        );
     this.attemptedWrong = false;
     this.questionElapsed = 0;
     this.autoHintShown = false;
     this.world.choices.setQuestion(
       this.currentQuestion,
       this.world.boat.group.position,
-      this.stageManager.stage.movingDistractors,
+      DIFFICULTY_DEFINITION_BY_ID.get(this.save.selectedDifficulty)?.movingDistractors
+        ?? this.stageManager.stage.movingDistractors,
       this.stageManager.correctAnswers + this.stageManager.stage.id,
     );
     if (this.qaScenario === 'stage10') {
@@ -504,6 +562,13 @@ export class GameEngine {
     const island = ISLANDS.find((candidate) => candidate.id === islandId);
     if (!island || !island.explorable || !this.isIslandUnlocked(island)) return;
     this.activeIsland = island;
+    if (!this.currentLanding || this.currentLanding.island.id !== island.id) {
+      this.currentLanding = this.world.collisions.nearestShore(
+        this.world.boat.group.position,
+        ISLANDS,
+        (candidate) => this.isIslandUnlocked(candidate),
+      );
+    }
     this.state = 'DOCKING';
     this.dockingTimer = 0.72;
     this.world.choices.group.visible = false;
@@ -529,17 +594,23 @@ export class GameEngine {
   }
 
   private updateDockPrompt(): void {
-    const nearest = this.world.collisions.nearestDock(this.world.boat.group.position, ISLANDS);
-    if (!nearest || nearest.distance > 10 || !this.isIslandUnlocked(nearest.island)) {
+    const nearest = this.world.collisions.nearestShore(
+      this.world.boat.group.position,
+      ISLANDS,
+      (island) => this.isIslandUnlocked(island),
+    );
+    if (!nearest) {
+      this.currentLanding = null;
       this.nearby = null;
       this.ui.showInteraction(null);
       return;
     }
+    this.currentLanding = nearest;
     this.nearby = {
       kind: 'dock',
       targetId: nearest.island.id,
-      distance: nearest.distance,
-      copy: `${nearest.island.name}에 내리기`,
+      distance: nearest.shoreDistance,
+      copy: `${nearest.island.name} 해안에 내리기`,
     };
     this.ui.showInteraction(this.nearby.copy);
   }
@@ -564,9 +635,10 @@ export class GameEngine {
       this.ui.showInteraction(this.nearby.copy);
       return;
     }
+    const boatPosition = this.currentLanding?.boatPosition ?? island.dock;
     const distanceToDock = Math.hypot(
-      this.world.player.group.position.x - island.dock.x,
-      this.world.player.group.position.z - island.dock.z,
+      this.world.player.group.position.x - boatPosition.x,
+      this.world.player.group.position.z - boatPosition.z,
     );
     if (distanceToDock <= 10.5) {
       this.nearby = { kind: 'board', targetId: island.id, distance: distanceToDock, copy: '배에 다시 타기' };
@@ -749,6 +821,8 @@ export class GameEngine {
       combo: this.combo,
       mode: islandMode ? 'island' : 'sailing',
       health: this.world.player.health,
+      starPoints: this.save.starPoints,
+      boosting: this.state === 'SAILING' && this.world.boat.isBoosting,
       quest: islandMode
         ? (this.activeIsland?.peaceful ? '섬의 친구와 보물을 찾아요' : '상자와 별빛 친구를 만나봐요')
         : this.freeSailMode
@@ -778,20 +852,30 @@ export class GameEngine {
     });
   }
 
-  private queueSpeech(count: number, text = this.currentQuestion?.entry.japanese): void {
+  private queueSpeech(count: number, text?: string, language?: string): void {
     this.speechRepeats = 0;
     this.speech.cancel();
     this.ui.setSpeaking(false);
-    if (!text || !this.save.settings.japaneseVoice || count <= 0) return;
+    const fromCurrentQuestion = text === undefined;
+    const resolvedText = text ?? this.currentQuestion?.spokenText;
+    const resolvedLanguage = language
+      ?? (fromCurrentQuestion ? this.currentQuestion?.speechLanguage : undefined)
+      ?? (fromCurrentQuestion && ['science', 'mathematics'].includes(this.currentQuestion?.subject ?? '')
+        ? 'ko-KR'
+        : 'ja-JP');
+    if (!resolvedText || !this.save.settings.japaneseVoice || count <= 0) return;
+    this.speechText = resolvedText;
+    this.speechLanguage = resolvedLanguage;
     this.speechRepeats = Math.min(2, Math.max(0, Math.floor(count)));
-    this.playNextSpeech(text);
+    this.playNextSpeech();
   }
 
-  private playNextSpeech(text: string): void {
+  private playNextSpeech(): void {
     if (this.speechRepeats <= 0) return;
     this.speechRepeats -= 1;
-    this.speech.speak(text, {
+    this.speech.speak(this.speechText, {
       volume: this.save.settings.volume,
+      language: this.speechLanguage,
       onSpeakingChange: (speaking) => {
         this.ui.setSpeaking(speaking);
         if (!speaking && this.speechRepeats > 0) this.speechRepeatTimer = 0.2;
@@ -803,8 +887,7 @@ export class GameEngine {
     if (this.speechRepeatTimer <= 0) return;
     this.speechRepeatTimer -= delta;
     if (this.speechRepeatTimer <= 0) {
-      const text = this.islandQuestion?.entry.japanese ?? this.currentQuestion?.entry.japanese;
-      if (text) this.playNextSpeech(text);
+      this.playNextSpeech();
     }
   }
 
@@ -828,6 +911,16 @@ export class GameEngine {
     void this.audio.unlock();
     if (forceFresh) this.resetRuntime(this.saveManager.reset());
     else this.resetRuntime(this.saveManager.load());
+    if (!this.save.courseSetupComplete) {
+      this.courseStartPending = true;
+      this.ui.showCourseSetup(this.save, false);
+      return;
+    }
+    this.continueAfterCourseSetup();
+  }
+
+  private continueAfterCourseSetup(): void {
+    this.courseStartPending = false;
     if (!this.save.tutorialComplete) {
       this.state = 'TUTORIAL';
       this.tutorialStep = 0;
@@ -874,12 +967,15 @@ export class GameEngine {
     this.activeInteraction = null;
     this.nearby = null;
     this.freeSailMode = save.freeSailUnlocked;
+    this.courseManager.resetHistory();
+    this.currentLanding = null;
     this.world.choices.clear();
     this.world.monsters.clear();
     this.world.islands.setUsedInteractionIds(save.claimedIslandInteractions);
     this.world.islands.setStage(save.currentStage);
     this.positionAtStart();
     this.applySettings();
+    this.applyCosmetics();
   }
 
   private positionAtStart(): void {
@@ -900,8 +996,10 @@ export class GameEngine {
   }
 
   private addScore(points: number): void {
-    this.save.score = Math.max(0, this.save.score + Math.max(0, Math.floor(points)));
+    const earned = Math.max(0, Math.floor(points));
+    this.save.score = Math.max(0, this.save.score + earned);
     this.save.highScore = Math.max(this.save.highScore, this.save.score);
+    this.applyShopState(this.shop.addPoints(this.save, earned));
   }
 
   private recordLearning(entryId: string, correct: boolean): void {
@@ -950,6 +1048,69 @@ export class GameEngine {
     this.persist();
   }
 
+  private updateCourse(subject: SaveData['selectedSubject'], difficulty: SaveData['selectedDifficulty']): void {
+    this.save.selectedSubject = subject;
+    this.save.selectedDifficulty = difficulty;
+    this.save.courseSetupComplete = true;
+    this.courseManager.resetHistory();
+    this.currentQuestion = null;
+    this.persist();
+    this.ui.hideCourseSetup();
+    if (this.courseStartPending) {
+      this.continueAfterCourseSetup();
+      return;
+    }
+    this.ui.showMenu(this.save);
+    this.ui.toast('학습 항로를 바꿨어요. 다음 출항부터 새 문제가 나와요!');
+  }
+
+  private applyShopState(state: CosmeticShopState): void {
+    this.save.starPoints = state.starPoints;
+    this.save.ownedBoatSkins = [...state.ownedBoatSkins];
+    this.save.ownedCharacterSkins = [...state.ownedCharacterSkins];
+    this.save.equippedBoatSkin = state.equippedBoatSkin;
+    this.save.equippedCharacterSkin = state.equippedCharacterSkin;
+  }
+
+  private handleCosmeticAction(cosmeticId: string): void {
+    const definition = COSMETIC_BY_ID.get(cosmeticId);
+    if (!definition) {
+      this.ui.setShopStatus('이 꾸미기 항목을 찾지 못했어요.');
+      return;
+    }
+    const owned = definition.target === 'boat'
+      ? this.save.ownedBoatSkins.includes(cosmeticId)
+      : this.save.ownedCharacterSkins.includes(cosmeticId);
+    let result = owned
+      ? this.shop.equip(this.save, cosmeticId)
+      : this.shop.purchase(this.save, cosmeticId);
+    if (result.success && result.reason === 'purchased') {
+      result = this.shop.equip(result.state, cosmeticId);
+    }
+    if (!result.success) {
+      const message = result.reason === 'insufficient-points'
+        ? `별 포인트가 ${Math.max(0, definition.price - this.save.starPoints).toLocaleString('ko-KR')}점 더 필요해요.`
+        : result.reason === 'already-owned'
+          ? '이미 가지고 있는 꾸미기예요.'
+          : '아직 장착할 수 없는 꾸미기예요.';
+      this.ui.setShopStatus(message);
+      return;
+    }
+    this.applyShopState(result.state);
+    this.applyCosmetics();
+    this.persist();
+    this.ui.showShop(this.save, COSMETICS);
+    this.ui.setShopStatus(`${definition.name} 꾸미기를 장착했어요!`);
+    this.audio.play('item');
+  }
+
+  private applyCosmetics(): void {
+    const boat = COSMETIC_BY_ID.get(this.save.equippedBoatSkin);
+    const character = COSMETIC_BY_ID.get(this.save.equippedCharacterSkin);
+    if (boat) this.world.boat.applyAppearance(boat.palette);
+    if (character) this.world.player.applyAppearance(character.palette);
+  }
+
   private bindUI(): void {
     this.ui.bind({
       start: () => this.beginFromMenu(false),
@@ -975,6 +1136,22 @@ export class GameEngine {
       toggleMap: () => { this.mapOpen = this.ui.toggleMap(); },
       selectItem: (slot) => { this.selectedSlot = slot; this.refreshHUD(); },
       useItem: () => this.useSelectedItem(),
+      openCourse: () => {
+        this.courseStartPending = false;
+        this.ui.showCourseSetup(this.save, true);
+      },
+      courseConfirm: ({ subject, difficulty }) => this.updateCourse(subject, difficulty),
+      courseCancel: () => {
+        this.courseStartPending = false;
+        this.ui.hideCourseSetup();
+        this.ui.showMenu(this.save);
+      },
+      openShop: () => this.ui.showShop(this.save, COSMETICS),
+      shopClose: () => {
+        this.ui.hideShop();
+        this.ui.showMenu(this.save);
+      },
+      cosmeticAction: (id) => this.handleCosmeticAction(id),
       mathAnswer: (answer) => this.handleMathAnswer(answer),
       mathClose: () => {
         this.currentMath = null;
@@ -1003,7 +1180,8 @@ export class GameEngine {
   }
 
   private installWindowHooks(): void {
-    if (!import.meta.env.DEV) return;
+    const params = new URLSearchParams(window.location.search);
+    if (!import.meta.env.DEV && !params.has('seed') && !params.has('qa')) return;
     const target = window as Window & {
       render_game_to_text?: () => string;
       advanceTime?: (ms: number) => void;

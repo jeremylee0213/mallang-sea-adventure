@@ -51,14 +51,16 @@ export class SpeechManager {
 
     try {
       const utterance = new Utterance(text);
-      utterance.lang = 'ja-JP';
+      const language = options.language?.trim() || 'ja-JP';
+      const languagePrefix = language.toLowerCase().split('-')[0] ?? language.toLowerCase();
+      utterance.lang = language;
       utterance.rate = clamp(options.rate, 0.86, 0.5, 1.25);
       utterance.pitch = clamp(options.pitch, 1.08, 0.6, 1.4);
       utterance.volume = clamp(options.volume, 1, 0, 1);
       utterance.voice = synthesis.getVoices().find((voice) => (
-        voice.lang.toLowerCase() === 'ja-jp'
+        voice.lang.toLowerCase() === language.toLowerCase()
       )) ?? synthesis.getVoices().find((voice) => (
-        voice.lang.toLowerCase().startsWith('ja')
+        voice.lang.toLowerCase().startsWith(languagePrefix)
       )) ?? null;
 
       this.speakingListener = options.onSpeakingChange;

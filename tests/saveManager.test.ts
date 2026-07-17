@@ -2,11 +2,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createDefaultSave,
   MemoryStorage,
   SAVE_KEY,
   SAVE_VERSION,
   SaveManager,
 } from '../src/core/SaveManager';
+import {
+  DEFAULT_BOAT_SKIN_ID,
+  DEFAULT_CHARACTER_SKIN_ID,
+} from '../src/data/cosmetics';
 
 const FIXED_NOW = '2026-07-14T00:00:00.000Z';
 
@@ -86,5 +91,63 @@ describe('SaveManager', () => {
     expect(recovered.discoveredIslands).toEqual(['jeju-wind-island']);
     expect(recovered.claimedIslandInteractions).toEqual(['jeju-wind-island-chest']);
     expect(recovered.wordStats).toEqual({ 'hira-a': { correct: 0, wrong: 3 } });
+    expect(recovered.selectedSubject).toBe('japanese');
+    expect(recovered.selectedDifficulty).toBe('easy');
+    expect(recovered.starPoints).toBe(0);
+    expect(recovered.ownedBoatSkins).toEqual([DEFAULT_BOAT_SKIN_ID]);
+    expect(recovered.ownedCharacterSkins).toEqual([DEFAULT_CHARACTER_SKIN_ID]);
+  });
+
+  it('버전 1 저장은 기존 점수를 별 포인트로 한 번만 이전한다', () => {
+    const storage = new MemoryStorage();
+    const legacy = {
+      ...createDefaultSave(() => FIXED_NOW),
+      version: 1,
+      score: 1_750,
+      highScore: 2_000,
+    };
+    delete (legacy as Partial<typeof legacy>).starPoints;
+    delete (legacy as Partial<typeof legacy>).courseSetupComplete;
+    storage.setItem(SAVE_KEY, JSON.stringify(legacy));
+    const manager = new SaveManager(storage, SAVE_KEY, () => FIXED_NOW);
+
+    const migrated = manager.load();
+    expect(migrated.version).toBe(2);
+    expect(migrated.starPoints).toBe(1_750);
+    expect(migrated.courseSetupComplete).toBe(true);
+
+    migrated.starPoints = 900;
+    manager.save(migrated);
+    expect(manager.load().starPoints).toBe(900);
+  });
+
+  it('손상된 코스와 꾸미기 값은 안전한 기본 상태로 정리한다', () => {
+    const storage = new MemoryStorage();
+    storage.setItem(SAVE_KEY, JSON.stringify({
+      version: SAVE_VERSION,
+      selectedSubject: 'history',
+      selectedDifficulty: 'impossible',
+      courseSetupComplete: 'yes',
+      starPoints: -400,
+      ownedBoatSkins: ['boat-mint-wave', 'boat-mint-wave', 'character-leaf-scout', 3],
+      ownedCharacterSkins: ['character-leaf-scout', 'unknown'],
+      equippedBoatSkin: 'boat-starlight',
+      equippedCharacterSkin: 'boat-mint-wave',
+    }));
+    const manager = new SaveManager(storage, SAVE_KEY, () => FIXED_NOW);
+
+    const recovered = manager.load();
+
+    expect(recovered.selectedSubject).toBe('japanese');
+    expect(recovered.selectedDifficulty).toBe('easy');
+    expect(recovered.courseSetupComplete).toBe(false);
+    expect(recovered.starPoints).toBe(0);
+    expect(recovered.ownedBoatSkins).toEqual([DEFAULT_BOAT_SKIN_ID, 'boat-mint-wave']);
+    expect(recovered.ownedCharacterSkins).toEqual([
+      DEFAULT_CHARACTER_SKIN_ID,
+      'character-leaf-scout',
+    ]);
+    expect(recovered.equippedBoatSkin).toBe(DEFAULT_BOAT_SKIN_ID);
+    expect(recovered.equippedCharacterSkin).toBe(DEFAULT_CHARACTER_SKIN_ID);
   });
 });

@@ -1,16 +1,24 @@
 import { ISLANDS } from '../data/islands';
 import { ITEM_DEFINITIONS } from '../data/items';
 import { JAPANESE_CONTENT } from '../data/japaneseContent';
+import {
+  COSMETIC_IDS_BY_TARGET,
+  DEFAULT_BOAT_SKIN_ID,
+  DEFAULT_CHARACTER_SKIN_ID,
+} from '../data/cosmetics';
+import { LEARNING_DIFFICULTIES, LEARNING_SUBJECTS } from '../data/courseContent';
 import type {
   GameSettings,
   Inventory,
   ItemId,
+  LearningDifficulty,
+  LearningSubject,
   LearningStats,
   SaveData,
   StorageLike,
 } from '../types';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 export const SAVE_KEY = 'mallang-sea-adventure.save.v1';
 
 const ITEM_IDS = ITEM_DEFINITIONS.map((item) => item.id);
@@ -20,6 +28,8 @@ const JAPANESE_IDS: ReadonlySet<string> = new Set<string>(
 const EXPLORABLE_ISLAND_IDS: ReadonlySet<string> = new Set<string>(
   ISLANDS.filter((island) => island.explorable).map((island) => island.id),
 );
+const SUBJECT_IDS: ReadonlySet<string> = new Set(LEARNING_SUBJECTS);
+const DIFFICULTY_IDS: ReadonlySet<string> = new Set(LEARNING_DIFFICULTIES);
 const ISLAND_INTERACTION_IDS: ReadonlySet<string> = new Set<string>(
   ISLANDS.flatMap((island) => {
     const ids: string[] = [];
@@ -129,6 +139,18 @@ function validTimestamp(value: unknown, fallback: string): string {
   return value;
 }
 
+function validSubject(value: unknown, fallback: LearningSubject): LearningSubject {
+  return typeof value === 'string' && SUBJECT_IDS.has(value)
+    ? value as LearningSubject
+    : fallback;
+}
+
+function validDifficulty(value: unknown, fallback: LearningDifficulty): LearningDifficulty {
+  return typeof value === 'string' && DIFFICULTY_IDS.has(value)
+    ? value as LearningDifficulty
+    : fallback;
+}
+
 export function createDefaultSave(now: () => string = () => new Date().toISOString()): SaveData {
   return {
     version: SAVE_VERSION,
@@ -153,6 +175,14 @@ export function createDefaultSave(now: () => string = () => new Date().toISOStri
     lastPlayedAt: now(),
     tutorialComplete: false,
     freeSailUnlocked: false,
+    selectedSubject: 'japanese',
+    selectedDifficulty: 'easy',
+    courseSetupComplete: false,
+    starPoints: 0,
+    ownedBoatSkins: [DEFAULT_BOAT_SKIN_ID],
+    ownedCharacterSkins: [DEFAULT_CHARACTER_SKIN_ID],
+    equippedBoatSkin: DEFAULT_BOAT_SKIN_ID,
+    equippedCharacterSkin: DEFAULT_CHARACTER_SKIN_ID,
   };
 }
 
@@ -172,6 +202,26 @@ export function normalizeSaveData(value: unknown, now: () => string = () => new 
   );
   const unlockedIslands = uniqueKnownStrings(value.unlockedIslands, EXPLORABLE_ISLAND_IDS);
   if (!unlockedIslands.includes('start-island')) unlockedIslands.unshift('start-island');
+  const isVersionOne = value.version === 1;
+  const ownedBoatSkins = uniqueKnownStrings(value.ownedBoatSkins, COSMETIC_IDS_BY_TARGET.boat);
+  const ownedCharacterSkins = uniqueKnownStrings(
+    value.ownedCharacterSkins,
+    COSMETIC_IDS_BY_TARGET.character,
+  );
+  if (!ownedBoatSkins.includes(DEFAULT_BOAT_SKIN_ID)) {
+    ownedBoatSkins.unshift(DEFAULT_BOAT_SKIN_ID);
+  }
+  if (!ownedCharacterSkins.includes(DEFAULT_CHARACTER_SKIN_ID)) {
+    ownedCharacterSkins.unshift(DEFAULT_CHARACTER_SKIN_ID);
+  }
+  const equippedBoatSkin = typeof value.equippedBoatSkin === 'string'
+    && ownedBoatSkins.includes(value.equippedBoatSkin)
+    ? value.equippedBoatSkin
+    : DEFAULT_BOAT_SKIN_ID;
+  const equippedCharacterSkin = typeof value.equippedCharacterSkin === 'string'
+    && ownedCharacterSkins.includes(value.equippedCharacterSkin)
+    ? value.equippedCharacterSkin
+    : DEFAULT_CHARACTER_SKIN_ID;
 
   return {
     version: SAVE_VERSION,
@@ -197,6 +247,20 @@ export function normalizeSaveData(value: unknown, now: () => string = () => new 
     freeSailUnlocked: typeof value.freeSailUnlocked === 'boolean'
       ? value.freeSailUnlocked
       : fallback.freeSailUnlocked,
+    selectedSubject: validSubject(value.selectedSubject, fallback.selectedSubject),
+    selectedDifficulty: validDifficulty(value.selectedDifficulty, fallback.selectedDifficulty),
+    courseSetupComplete: isVersionOne
+      ? true
+      : typeof value.courseSetupComplete === 'boolean'
+        ? value.courseSetupComplete
+        : fallback.courseSetupComplete,
+    starPoints: isVersionOne
+      ? score
+      : clampedInteger(value.starPoints, fallback.starPoints, 0, Number.MAX_SAFE_INTEGER),
+    ownedBoatSkins,
+    ownedCharacterSkins,
+    equippedBoatSkin,
+    equippedCharacterSkin,
   };
 }
 
