@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#70cfdf" />
     <meta
       name="description"
-      content="배를 타고 일본어와 수학을 배우는 어린이 3D 모험 게임, 말랑바다 모험단"
+      content="배를 타고 다섯 과목을 배우고 섬을 탐험하는 어린이 3D 모험 게임, 말랑바다 모험단"
     />
     <title>말랑바다 모험단</title>
-    <script type="module" crossorigin src="/mallang-sea-adventure/assets/index-zWscxwpA.js"></script>
-    <link rel="stylesheet" crossorigin href="/mallang-sea-adventure/assets/index-DFc4Ax-K.css">
+    <script type="module" crossorigin src="/mallang-sea-adventure/assets/index-Dy7pyntV.js"></script>
+    <link rel="stylesheet" crossorigin href="/mallang-sea-adventure/assets/index-DPCoy_aX.css">
   </head>
   <body>
     <main id="app" aria-label="말랑바다 모험단 게임">
@@ -21,7 +21,7 @@
           <div class="menu-shell">
             <div class="title-lockup">
               <div class="sun-mark" aria-hidden="true"><span>✦</span></div>
-              <p class="eyebrow">일본어와 수학으로 떠나는 항해</p>
+              <p class="eyebrow">다섯 가지 배움으로 떠나는 항해</p>
               <h1 id="game-title"><span>말랑바다</span> 모험단</h1>
               <p class="title-jp" lang="ja">ふわふわ海の冒険</p>
             </div>
@@ -39,6 +39,14 @@
                   <span aria-hidden="true">↻</span> 처음부터 시작
                 </button>
               </div>
+              <div class="menu-row utility-row">
+                <button id="course-settings-btn" class="soft-action" type="button">
+                  <span aria-hidden="true">📚</span> 학습 설정
+                </button>
+                <button id="shop-btn" class="soft-action" type="button">
+                  <span aria-hidden="true">🎨</span> 꾸미기 상점
+                </button>
+              </div>
               <button id="controls-btn" class="text-action" type="button">⌨ 간단한 조작법 보기</button>
             </div>
 
@@ -48,7 +56,7 @@
                 <input id="volume-input" type="range" min="0" max="1" step="0.05" value="0.55" />
               </label>
               <label class="toggle-line">
-                <span>🗣 일본어 음성</span>
+                <span>🗣 학습 음성</span>
                 <input id="speech-toggle" type="checkbox" checked />
               </label>
               <label>
@@ -64,10 +72,55 @@
             <div class="save-summary" aria-live="polite">
               <span>⭐ 최고 점수 <b id="menu-best-score">0</b></span>
               <span>🗺 도달 스테이지 <b id="menu-best-stage">1</b></span>
+              <span>✦ 별 포인트 <b id="menu-star-points">0</b></span>
             </div>
+            <p id="menu-course-summary" class="course-summary">일본어 · 쉬움</p>
             <button id="parent-reset-btn" class="parent-action" type="button">보호자용 저장 초기화</button>
           </div>
           <p class="privacy-note">광고·결제·채팅 없이, 이 기기에만 안전하게 저장돼요.</p>
+        </section>
+
+        <section id="course-screen" class="screen-overlay hidden" aria-labelledby="course-title">
+          <div class="dialog-card course-card">
+            <p class="eyebrow">오늘의 배움 항로</p>
+            <h2 id="course-title">무엇을 공부할까요?</h2>
+            <p class="course-lead">과목과 난이도를 고르면 바다 문제가 바뀌어요.</p>
+            <div id="subject-options" class="subject-options" role="radiogroup" aria-label="학습 과목"></div>
+            <fieldset class="difficulty-picker">
+              <legend>난이도</legend>
+              <div id="difficulty-options" class="difficulty-options"></div>
+            </fieldset>
+            <p id="course-status" class="modal-status" role="status">과목과 난이도를 선택해 주세요.</p>
+            <div class="dialog-actions course-actions">
+              <button id="course-cancel-btn" class="text-action" type="button">돌아가기</button>
+              <button id="course-confirm-btn" class="primary-small" type="button">이 항로로 출발</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="shop-screen" class="screen-overlay hidden" aria-labelledby="shop-title">
+          <div class="dialog-card shop-card">
+            <div class="shop-head">
+              <div>
+                <p class="eyebrow">놀이로 모은 보상</p>
+                <h2 id="shop-title">말랑 꾸미기 상점</h2>
+              </div>
+              <div class="wallet" aria-label="보유 별 포인트">✦ <b id="shop-star-points">0</b></div>
+            </div>
+            <p class="shop-note">현금 결제 없이, 모험에서 얻은 별 포인트만 사용해요.</p>
+            <div class="shop-sections">
+              <section aria-labelledby="boat-shop-title">
+                <h3 id="boat-shop-title">⛵ 배 꾸미기</h3>
+                <div id="boat-shop-list" class="cosmetic-list"></div>
+              </section>
+              <section aria-labelledby="character-shop-title">
+                <h3 id="character-shop-title">🧢 캐릭터 꾸미기</h3>
+                <div id="character-shop-list" class="cosmetic-list"></div>
+              </section>
+            </div>
+            <p id="shop-status" class="modal-status" role="status">마음에 드는 모습을 골라 보세요.</p>
+            <button id="shop-close-btn" class="primary-small" type="button">꾸미기 완료</button>
+          </div>
         </section>
 
         <section id="tutorial-screen" class="screen-overlay hidden" aria-labelledby="tutorial-title">
@@ -90,6 +143,7 @@
           <div class="top-left-stack">
             <div class="stage-badge"><span>항해</span><b id="hud-stage">1</b></div>
             <div class="score-pill">⭐ <b id="hud-score">0</b></div>
+            <div class="point-pill">✦ <b id="hud-star-points">0</b></div>
             <div id="health-pill" class="health-pill hidden" aria-label="체력">
               <span aria-hidden="true">♥</span>
               <div><i id="health-fill"></i></div>
@@ -125,6 +179,10 @@
           </div>
 
           <div id="item-bar" class="item-bar" aria-label="아이템 슬롯"></div>
+          <button id="use-item-btn" class="use-item-btn" type="button" aria-label="선택한 아이템 사용">
+            <kbd>Q</kbd><span>아이템</span>
+          </button>
+          <div id="boost-chip" class="boost-chip" role="status"><kbd>Space</kbd><span>무제한 부스터</span></div>
           <div id="quest-chip" class="quest-chip"><span>목표</span><b id="quest-copy">정답 블록을 찾아요</b></div>
 
           <button id="pause-btn" class="pause-btn" type="button" aria-label="일시정지">Ⅱ</button>
@@ -155,9 +213,11 @@
             <h2 id="controls-title">조작법</h2>
             <div class="controls-grid">
               <div><kbd>WASD</kbd><span>이동·항해</span></div>
-              <div><kbd>Space</kbd><span>아이템·점프</span></div>
-              <div><kbd>E</kbd><span>하선·상호작용</span></div>
+              <div><kbd>Space</kbd><span>항해 부스터·섬 점프</span></div>
+              <div><kbd>Q</kbd><span>선택 아이템 사용</span></div>
+              <div><kbd>E</kbd><span>어느 해안에서나 하선·상호작용</span></div>
               <div><kbd>F</kbd><span>반짝 칼 공격</span></div>
+              <div><kbd>마우스·방향키</kbd><span>섬 카메라 회전</span></div>
               <div><kbd>R</kbd><span>발음 다시 듣기</span></div>
               <div><kbd>M</kbd><span>큰 지도</span></div>
               <div><kbd>1–4</kbd><span>아이템 선택</span></div>
