@@ -107,6 +107,7 @@ export class GameEngine {
   private questionElapsed = 0;
   private autoHintShown = false;
   private wakeSoundTimer = 0;
+  private boostParticleTimer = 0;
   private courseStartPending = false;
   private currentLanding: ShoreLanding | null = null;
 
@@ -144,7 +145,8 @@ export class GameEngine {
   destroy(): void {
     this.running = false;
     this.input.destroy();
-    this.speech.cancel();
+    this.speech.destroy();
+    this.audio.destroy();
     this.world.dispose();
     window.removeEventListener('resize', this.world.resize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
@@ -220,6 +222,10 @@ export class GameEngine {
         cooldown: Number(itemState.cooldowns[id as ItemId].toFixed(2)),
         active: Number(itemState.activeEffects[id as ItemId].toFixed(2)),
       })),
+      effects: {
+        boostAudio: this.audio.isBoostSoundActive(),
+        boostFlames: this.world.particles.getActiveCount('flame'),
+      },
       mathQuiz: this.currentMath ? {
         kind: this.currentMath.kind,
         prompt: this.currentMath.prompt,
@@ -284,6 +290,11 @@ export class GameEngine {
           break;
       }
     }
+    this.audio.setBoosting(
+      this.state === 'SAILING'
+      && !this.mapOpen
+      && this.world.boat.isBoosting,
+    );
     this.hudRefreshTimer -= delta;
     if (this.hudRefreshTimer <= 0) {
       this.hudRefreshTimer = 0.1;
@@ -296,6 +307,7 @@ export class GameEngine {
     const itemState = this.items.tick(delta);
     const tailwind = itemState.activeEffects.tailwindBottle > 0 ? 1.3 : 1;
     this.world.boat.update(delta, this.input, this.world.collisions, tailwind);
+    this.updateBoostTrail(delta);
     this.world.choices.update(delta, {
       slowMultiplier: itemState.activeEffects.timeBubble > 0 ? 0.35 : 1,
       magnetTarget: this.world.boat.group.position,
@@ -1190,6 +1202,26 @@ export class GameEngine {
     target.render_game_to_text = () => this.renderGameToText();
     target.advanceTime = (ms: number) => this.advanceTime(ms);
     target.__mallangGame = this;
+  }
+
+  private updateBoostTrail(delta: number): void {
+    if (!this.world.boat.isBoosting || this.world.boat.speed < 0.5) {
+      this.boostParticleTimer = 0;
+      return;
+    }
+    this.boostParticleTimer -= delta;
+    if (this.boostParticleTimer > 0) return;
+    this.boostParticleTimer += 0.055;
+
+    const boat = this.world.boat.group;
+    boat.updateWorldMatrix(true, false);
+    const left = boat.localToWorld(new THREE.Vector3(-1.45, 1.15, -2.9));
+    const right = boat.localToWorld(new THREE.Vector3(1.45, 1.15, -2.9));
+    const backward = new THREE.Vector3(0, 0, -1)
+      .applyQuaternion(boat.getWorldQuaternion(new THREE.Quaternion()))
+      .normalize();
+    this.world.particles.emitBoostTrail(left, backward, 2);
+    this.world.particles.emitBoostTrail(right, backward, 2);
   }
 
   private readonly onVisibilityChange = (): void => {

@@ -16,6 +16,11 @@ interface ToneStep {
   gain?: number;
 }
 
+interface BoostSound {
+  readonly master: GainNode;
+  readonly sources: readonly AudioScheduledSourceNode[];
+}
+
 const SOUNDS: Record<SoundName, readonly ToneStep[]> = {
   correct: [
     { frequency: 523, duration: 0.09, gain: 0.18 },
@@ -52,9 +57,21 @@ const SOUNDS: Record<SoundName, readonly ToneStep[]> = {
 export class AudioManager {
   private context: AudioContext | null = null;
   private volume = 0.55;
+  private boostRequested = false;
+  private boostSound: BoostSound | null = null;
 
   setVolume(volume: number): void {
     this.volume = Math.min(1, Math.max(0, volume));
+    const context = this.context;
+    if (context && this.boostSound) {
+      this.boostSound.master.gain.setTargetAtTime(
+        Math.max(0.0001, 0.035 * this.volume),
+        context.currentTime,
+        0.04,
+      );
+    } else if (this.boostRequested && this.volume > 0) {
+      this.startBoostSound();
+    }
   }
 
   async unlock(): Promise<void> {
@@ -89,11 +106,107 @@ export class AudioManager {
     }
   }
 
+  setBoosting(active: boolean): void {
+    this.boostRequested = active;
+    if (active) this.startBoostSound();
+    else this.stopBoostSound();
+  }
+
+  isBoostSoundActive(): boolean {
+    return this.boostSound !== null;
+  }
+
   suspend(): void {
+    this.boostRequested = false;
+    this.stopBoostSound(true);
     void this.context?.suspend();
   }
 
   resume(): void {
     void this.context?.resume();
+  }
+
+  destroy(): void {
+    this.boostRequested = false;
+    this.stopBoostSound(true);
+    void this.context?.close();
+    this.context = null;
+  }
+
+  private startBoostSound(): void {
+    const context = this.context;
+    if (!context || this.boostSound || this.volume <= 0 || context.state === 'closed') return;
+
+    const now = context.currentTime;
+    const master = context.createGain();
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(
+      Math.max(0.0001, 0.035 * this.volume),
+      now + 0.12,
+    );
+    master.connect(context.destination);
+
+    const lowPass = context.createBiquadFilter();
+    lowPass.type = 'lowpass';
+    lowPass.frequency.setValueAtTime(720, now);
+    lowPass.Q.setValueAtTime(0.8, now);
+    lowPass.connect(master);
+
+    const engine = context.createOscillator();
+    engine.type = 'sawtooth';
+    engine.frequency.setValueAtTime(92, now);
+    engine.frequency.exponentialRampToValueAtTime(178, now + 0.24);
+    engine.connect(lowPass);
+
+    const shimmer = context.createOscillator();
+    shimmer.type = 'triangle';
+    shimmer.frequency.setValueAtTime(184, now);
+    shimmer.frequency.exponentialRampToValueAtTime(284, now + 0.3);
+    const shimmerGain = context.createGain();
+    shimmerGain.gain.setValueAtTime(0.18, now);
+    shimmer.connect(shimmerGain).connect(lowPass);
+
+    const noiseBuffer = context.createBuffer(1, Math.floor(context.sampleRate * 0.32), context.sampleRate);
+    const noiseData = noiseBuffer.getChannelData(0);
+    for (let index = 0; index < noiseData.length; index += 1) {
+      noiseData[index] = Math.random() * 2 - 1;
+    }
+    const air = context.createBufferSource();
+    air.buffer = noiseBuffer;
+    air.loop = true;
+    const airFilter = context.createBiquadFilter();
+    airFilter.type = 'bandpass';
+    airFilter.frequency.setValueAtTime(540, now);
+    airFilter.Q.setValueAtTime(0.7, now);
+    const airGain = context.createGain();
+    airGain.gain.setValueAtTime(0.22, now);
+    air.connect(airFilter).connect(airGain).connect(master);
+
+    engine.start(now);
+    shimmer.start(now);
+    air.start(now);
+    this.boostSound = { master, sources: [engine, shimmer, air] };
+  }
+
+  private stopBoostSound(immediate = false): void {
+    const context = this.context;
+    const sound = this.boostSound;
+    if (!context || !sound) return;
+    this.boostSound = null;
+    const now = context.currentTime;
+    const stopAt = now + (immediate ? 0.01 : 0.1);
+    sound.master.gain.cancelScheduledValues(now);
+    sound.master.gain.setValueAtTime(
+      Math.max(0.0001, sound.master.gain.value),
+      now,
+    );
+    sound.master.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+    for (const source of sound.sources) {
+      try {
+        source.stop(stopAt + 0.02);
+      } catch {
+        // A source that already stopped needs no further cleanup.
+      }
+    }
   }
 }

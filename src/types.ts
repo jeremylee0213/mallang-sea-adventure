@@ -335,6 +335,9 @@ export interface StorageLike {
 export interface VoiceLike {
   readonly lang: string;
   readonly name?: string;
+  readonly voiceURI?: string;
+  readonly default?: boolean;
+  readonly localService?: boolean;
 }
 
 export interface SpeechUtteranceLike {
@@ -352,6 +355,8 @@ export interface SpeechSynthesisLike {
   cancel(): void;
   speak(utterance: SpeechUtteranceLike): void;
   getVoices(): readonly VoiceLike[];
+  addEventListener?(type: 'voiceschanged', listener: () => void): void;
+  removeEventListener?(type: 'voiceschanged', listener: () => void): void;
 }
 
 export type SpeechUtteranceConstructor = new (text: string) => SpeechUtteranceLike;

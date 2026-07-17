@@ -8,6 +8,7 @@ import { BoatController } from '../src/world/BoatController';
 import { CameraController } from '../src/world/CameraController';
 import { CollisionManager } from '../src/world/CollisionManager';
 import { PlayerController } from '../src/world/PlayerController';
+import { ParticleManager } from '../src/world/ParticleManager';
 
 class FakeInput {
   readonly down = new Set<string>();
@@ -105,5 +106,22 @@ describe('third-person world controllers', () => {
     expect(landing?.playerSpawn.x).toBeCloseTo(island.position.x + island.radius - 4, 6);
     expect(landing?.playerSpawn.z).toBeCloseTo(island.position.z, 6);
     expect(landing?.playerSpawn.heading).toBeCloseTo(-Math.PI / 2, 6);
+  });
+
+  it('reuses the bounded particle pool for boost flames and lets the trail fade', () => {
+    const particles = new ParticleManager(12);
+    const origin = new THREE.Vector3(0, 1, 0);
+    const backward = new THREE.Vector3(0, 0, -1);
+
+    for (let index = 0; index < 20; index += 1) {
+      particles.emitBoostTrail(origin, backward, 2);
+    }
+    expect(particles.getActiveCount('flame')).toBeLessThanOrEqual(12);
+    expect(particles.getActiveCount('flame')).toBeGreaterThan(0);
+
+    particles.update(0.6);
+    expect(particles.getActiveCount('flame')).toBe(0);
+    particles.burst(origin, 4);
+    expect(particles.getActiveCount('star')).toBe(4);
   });
 });

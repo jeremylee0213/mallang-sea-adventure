@@ -141,9 +141,22 @@ async function createPage(browser, saveData = null, viewport = { width: 1280, he
     }
     const speech = {
       cancel() {},
-      getVoices() { return [{ lang: 'ja-JP', name: 'QA Japanese' }]; },
+      getVoices() {
+        return [
+          { lang: 'ja-JP', name: 'QA Japanese Natural', default: true, localService: true },
+          { lang: 'en-US', name: 'QA English Natural', localService: true },
+          { lang: 'zh-Hans-CN', name: 'QA Chinese Natural', localService: true },
+          { lang: 'ko-KR', name: 'QA Korean Natural', localService: true },
+        ];
+      },
       speak(utterance) {
-        window.__mallangSpokenTexts.push({ text: utterance.text, language: utterance.lang });
+        window.__mallangSpokenTexts.push({
+          text: utterance.text,
+          language: utterance.lang,
+          rate: utterance.rate,
+          pitch: utterance.pitch,
+          voiceLanguage: utterance.voice?.lang ?? null,
+        });
         utterance.onstart?.();
         window.setTimeout(() => utterance.onend?.(), 15);
       },
@@ -182,6 +195,10 @@ try {
     await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).mode === 'SAILING');
     let snapshot = await state(page);
     check(snapshot.blocks.filter((block) => block.correct).length === 1, 'sailing quiz has exactly one correct block');
+    const japaneseSpoken = await page.evaluate(() => window.__mallangSpokenTexts.at(-1));
+    check(japaneseSpoken?.language === 'ja-JP', 'Japanese course requests the formal ja-JP locale');
+    check(japaneseSpoken?.voiceLanguage === 'ja-JP', 'Japanese course selects an exact ja-JP voice');
+    check(japaneseSpoken?.rate === 0.78 && japaneseSpoken?.pitch === 1, 'Japanese pronunciation is slow and natural');
     const quizLayout = await page.evaluate(() => {
       const card = document.querySelector('#quiz-card').getBoundingClientRect();
       const items = document.querySelector('#item-bar').getBoundingClientRect();
@@ -214,8 +231,14 @@ try {
     check(snapshot.boat.boosting === true, 'Space activates unlimited sailing boost');
     check(Math.abs(snapshot.boat.speed) > speedBeforeBoost, 'Space boost increases boat speed');
     check(snapshot.items.find((item) => item.id === 'starlightCompass').count === compassBefore, 'boost does not consume inventory');
+    check(snapshot.effects.boostAudio === true, 'boost starts a continuous synthesized engine sound');
+    check(snapshot.effects.boostFlames > 0, 'boost emits warm flame particles behind the boat');
+    await screenshot(page, '03-boosting');
     await page.keyboard.up('Space');
-    await advance(page, 30);
+    await advance(page, 600);
+    snapshot = await state(page);
+    check(snapshot.effects.boostAudio === false, 'boost sound stops after Space is released');
+    check(snapshot.effects.boostFlames === 0, 'boost flame trail fades after Space is released');
     await keyFrames(page, 'KeyQ', 2);
     snapshot = await state(page);
     check(snapshot.items.find((item) => item.id === 'starlightCompass').count === compassBefore - 1, 'Q uses selected item');
@@ -272,6 +295,8 @@ try {
     check(visiblePrompt === snapshot.quiz.prompt, `${subject} card shows the question prompt`);
     check(!visibleMeaning.includes(snapshot.quiz.answer), `${subject} card hides the answer before success`);
     check(spoken?.text === snapshot.quiz.prompt, `${subject} autoplay speaks the prompt, not the answer`);
+    check(spoken?.language === 'ko-KR' && spoken?.voiceLanguage === 'ko-KR', `${subject} uses an exact ko-KR voice`);
+    check(spoken?.rate === 0.82 && spoken?.pitch === 1, `${subject} pronunciation is slow and natural`);
     await context.close();
   }
 
